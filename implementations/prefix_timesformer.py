@@ -29,11 +29,13 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.timesformer.configuration_timesformer import TimesformerConfig
 
+from modules.modules import PrefixModule
 
 logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "TimesformerConfig"
 _CHECKPOINT_FOR_DOC = "facebook/timesformer"
+REDUCTION_SIZE = 8
 
 
 # Adapted from https://github.com/facebookresearch/TimeSformer/blob/a5ef29a7b7264baff199a30b3306ac27de901133/timesformer/models/vit.py#L155
@@ -197,6 +199,9 @@ class TimesformerSelfAttention(nn.Module):
         self.qkv = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attention_dropout_prob)
 
+        self.prefix_k = PrefixModule(initial_dim=config.hidden_size, reduction_size=REDUCTION_SIZE)
+        self.prefix_v = PrefixModule(initial_dim=config.hidden_size, reduction_size=REDUCTION_SIZE)
+
     def forward(self, hidden_states, output_attentions: bool = False):
         batch_size, hidden_size, num_channels = hidden_states.shape
         qkv = (
@@ -205,6 +210,12 @@ class TimesformerSelfAttention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         query, key, value = qkv[0], qkv[1], qkv[2]
+
+        prefix_k = self.prefix_k(hidden_states)
+        key = torch.cat((prefix_k, key), dim=1)
+
+        prefix_v = self.prefix_v(hidden_states)
+        value = torch.cat((prefix_v, value), dim=1)
 
         attention_probs = (query @ key.transpose(-2, -1)) * self.scale
         attention_probs = attention_probs.softmax(dim=-1)
