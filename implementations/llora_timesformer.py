@@ -29,11 +29,14 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.timesformer.configuration_timesformer import TimesformerConfig
 
+from modules.modules import LloraModule
+
 
 logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "TimesformerConfig"
 _CHECKPOINT_FOR_DOC = "facebook/timesformer"
+DEFAULT_RANK = 8
 
 
 # Adapted from https://github.com/facebookresearch/TimeSformer/blob/a5ef29a7b7264baff199a30b3306ac27de901133/timesformer/models/vit.py#L155
@@ -184,7 +187,7 @@ class TimeSformerDropPath(nn.Module):
 
 # Adapted from https://github.com/facebookresearch/TimeSformer/blob/a5ef29a7b7264baff199a30b3306ac27de901133/timesformer/models/vit.py#L57
 class TimesformerSelfAttention(nn.Module):
-    def __init__(self, config: TimesformerConfig):
+    def __init__(self, config: TimesformerConfig, rank: int):
         super().__init__()
 
         num_heads = config.num_attention_heads
@@ -197,6 +200,10 @@ class TimesformerSelfAttention(nn.Module):
         self.qkv = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attention_dropout_prob)
 
+        self.q_llora = LloraModule(initial_dim=config.hidden_size, rank=rank)
+        self.k_llora = LloraModule(initial_dim=config.hidden_size, rank=rank)
+        self.v_llora = LloraModule(initial_dim=config.hidden_size, rank=rank)
+
     def forward(self, hidden_states, output_attentions: bool = False):
         batch_size, hidden_size, num_channels = hidden_states.shape
         qkv = (
@@ -205,6 +212,10 @@ class TimesformerSelfAttention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         query, key, value = qkv[0], qkv[1], qkv[2]
+
+        query = query + self.q_llora(hidden_states)
+        key = key + self.k_llora(hidden_states)
+        value = value + self.v_llora(hidden_states)
 
         attention_probs = (query @ key.transpose(-2, -1)) * self.scale
         attention_probs = attention_probs.softmax(dim=-1)
@@ -236,9 +247,9 @@ class TimesformerSelfOutput(nn.Module):
 
 
 class TimeSformerAttention(nn.Module):
-    def __init__(self, config: TimesformerConfig) -> None:
+    def __init__(self, config: TimesformerConfig, rank: int) -> None:
         super().__init__()
-        self.attention = TimesformerSelfAttention(config)
+        self.attention = TimesformerSelfAttention(config, rank)
         self.output = TimesformerSelfOutput(config)
 
     def forward(
@@ -289,7 +300,7 @@ class TimesformerOutput(nn.Module):
 
 # Adapted from https://github.com/facebookresearch/TimeSformer/blob/a5ef29a7b7264baff199a30b3306ac27de901133/timesformer/models/vit.py#L89
 class TimesformerLayer(nn.Module):
-    def __init__(self, config: TimesformerConfig, layer_index: int) -> None:
+    def __init__(self, config: TimesformerConfig, layer_index: int, rank: int) -> None:
         super().__init__()
 
         attention_type = config.attention_type
@@ -300,7 +311,7 @@ class TimesformerLayer(nn.Module):
         drop_path_rate = drop_path_rates[layer_index]
 
         self.drop_path = TimeSformerDropPath(drop_path_rate) if drop_path_rate > 0.0 else nn.Identity()
-        self.attention = TimeSformerAttention(config)
+        self.attention = TimeSformerAttention(config, rank)
         self.intermediate = TimesformerIntermediate(config)
         self.output = TimesformerOutput(config)
         self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
@@ -314,7 +325,7 @@ class TimesformerLayer(nn.Module):
         # Temporal Attention Parameters
         if self.attention_type == "divided_space_time":
             self.temporal_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            self.temporal_attention = TimeSformerAttention(config)
+            self.temporal_attention = TimeSformerAttention(config, rank)
             self.temporal_dense = nn.Linear(config.hidden_size, config.hidden_size)
 
     def forward(self, hidden_states: torch.Tensor, output_attentions: bool = False):
@@ -412,10 +423,10 @@ class TimesformerLayer(nn.Module):
 
 
 class TimesformerEncoder(nn.Module):
-    def __init__(self, config: TimesformerConfig) -> None:
+    def __init__(self, config: TimesformerConfig, rank: int = DEFAULT_RANK) -> None:
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([TimesformerLayer(config, ind) for ind in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([TimesformerLayer(config, ind, rank) for ind in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
 
     def forward(
