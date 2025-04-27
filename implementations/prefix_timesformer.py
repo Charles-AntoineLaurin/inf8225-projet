@@ -199,8 +199,8 @@ class TimesformerSelfAttention(nn.Module):
         self.qkv = nn.Linear(config.hidden_size, config.hidden_size * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attention_dropout_prob)
 
-        self.prefix_k = PrefixModule(initial_dim=config.hidden_size, reduction_size=REDUCTION_SIZE)
-        self.prefix_v = PrefixModule(initial_dim=config.hidden_size, reduction_size=REDUCTION_SIZE)
+        self.prefix_k = PrefixModule(initial_dim=config.hidden_size, reduction_size=REDUCTION_SIZE, num_heads=self.num_heads, head_dim=head_dim)
+        self.prefix_v = PrefixModule(initial_dim=config.hidden_size, reduction_size=REDUCTION_SIZE, num_heads=self.num_heads, head_dim=head_dim)
 
     def forward(self, hidden_states, output_attentions: bool = False):
         batch_size, hidden_size, num_channels = hidden_states.shape
@@ -210,13 +210,20 @@ class TimesformerSelfAttention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         query, key, value = qkv[0], qkv[1], qkv[2]
-
+        
         prefix_k = self.prefix_k(hidden_states)
-        key = torch.cat((prefix_k, key), dim=1)
+        
+        if prefix_k.shape[0] == key.shape[0]:
+            key = torch.cat((prefix_k, key), dim=-2)
+        else :
+            key = torch.cat((prefix_k, key), dim=0)
 
         prefix_v = self.prefix_v(hidden_states)
-        value = torch.cat((prefix_v, value), dim=1)
-
+        if prefix_v.shape[0] == value.shape[0]:
+            value = torch.cat((prefix_v, value), dim=-2)
+        else :
+            value = torch.cat((prefix_v, value), dim=0)
+        
         attention_probs = (query @ key.transpose(-2, -1)) * self.scale
         attention_probs = attention_probs.softmax(dim=-1)
         attention_probs = self.attn_drop(attention_probs)
@@ -224,7 +231,7 @@ class TimesformerSelfAttention(nn.Module):
         context_layer = (attention_probs @ value).transpose(1, 2).reshape(batch_size, hidden_size, num_channels)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
-
+        
         return outputs
 
 

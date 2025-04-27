@@ -212,10 +212,29 @@ class TimesformerSelfAttention(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         query, key, value = qkv[0], qkv[1], qkv[2]
+        
+        # TODO : modified here
+        q_llora_vec = (
+                    self.q_llora(hidden_states)
+                    .reshape(batch_size, hidden_size, 1, self.num_heads, num_channels // self.num_heads)
+                    .permute(2, 0, 3, 1, 4)
+        )[0]
 
-        query = query + self.q_llora(hidden_states)
-        key = key + self.k_llora(hidden_states)
-        value = value + self.v_llora(hidden_states)
+        k_llora_vec = (
+                    self.k_llora(hidden_states)
+                    .reshape(batch_size, hidden_size, 1, self.num_heads, num_channels // self.num_heads)
+                    .permute(2, 0, 3, 1, 4)
+        )[0]
+
+        v_llora_vec = (
+                    self.v_llora(hidden_states)
+                    .reshape(batch_size, hidden_size, 1, self.num_heads, num_channels // self.num_heads)
+                    .permute(2, 0, 3, 1, 4)
+        )[0]
+        
+        query = query + q_llora_vec
+        key = key + k_llora_vec
+        value = value + v_llora_vec
 
         attention_probs = (query @ key.transpose(-2, -1)) * self.scale
         attention_probs = attention_probs.softmax(dim=-1)

@@ -309,7 +309,7 @@ class TimesformerLayer(nn.Module):
         self.layernorm_before = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.layernorm_after = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
-        self.adapter_layer_att = AdapterModule(initial_dim=config.hidden_size, rank=rank)
+        # self.adapter_layer_att = AdapterModule(initial_dim=config.hidden_size, rank=rank)
         self.adapter_ffn = AdapterModule(initial_dim=config.hidden_size, rank=rank)
 
         self.config = config
@@ -392,7 +392,7 @@ class TimesformerLayer(nn.Module):
             residual_spatial = self.drop_path(attention_output)
 
             # Adding the adapter layer
-            residual_spatial = residual_spatial + self.adapter_layer_att(residual_spatial)
+            # residual_spatial = residual_spatial + self.adapter_layer_att(residual_spatial)
 
             # Taking care of CLS token
             cls_token = residual_spatial[:, 0, :]
